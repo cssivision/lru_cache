@@ -1,0 +1,11 @@
+[package]
+name = "lru_cache"
+version = "0.1.0"
+authors = ["cssivision <cssivision@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/cssivision/lru_cache"
+description = "A small LRU cache with a TTL and a background sweeper."
+edition = "2021"
+
+[dependencies]
+awak = "0.2.45"
