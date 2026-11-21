@@ -1,4 +1,4 @@
-//! A small LRU cache shared by `dns-resolver`, `http2socks` and `rabbit`.
+//! A small LRU cache with a TTL.
 //!
 //! [`Cache`] keeps entries in a `HashMap` and remembers when each was last
 //! used. Every access moves the entry to the recently-used end, and inserting
