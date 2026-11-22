@@ -31,7 +31,7 @@ pub struct Cache<K, V> {
 
 impl<K, V> Cache<K, V>
 where
-    K: Hash + Eq + Clone,
+    K: Hash + Eq,
 {
     /// Builds a cache that drops a stale entry as soon as it is looked up.
     pub fn new(ttl: Duration, capacity: usize) -> Self {
@@ -130,14 +130,18 @@ where
     }
 
     fn evict_lru(&mut self) {
-        if let Some(key) = self
-            .entries
-            .iter()
-            .min_by_key(|(_, slot)| slot.last_used)
-            .map(|(key, _)| key.clone())
-        {
-            self.entries.remove(&key);
-        }
+        let Some(oldest) = self.entries.values().map(|slot| slot.last_used).min() else {
+            return;
+        };
+        let mut removed = false;
+        self.entries.retain(|_, slot| {
+            if !removed && slot.last_used == oldest {
+                removed = true;
+                false
+            } else {
+                true
+            }
+        });
     }
 }
 
@@ -149,7 +153,7 @@ pub struct Entry<'a, K, V> {
 
 impl<'a, K, V> Entry<'a, K, V>
 where
-    K: Hash + Eq + Clone,
+    K: Hash + Eq,
 {
     /// Inserts the value produced by `default` when the entry is vacant and
     /// returns a mutable reference to the stored value.
@@ -161,22 +165,13 @@ where
         if cache.is_expired(&key) {
             cache.entries.remove(&key);
         }
-        if !cache.entries.contains_key(&key) {
-            if cache.entries.len() >= cache.capacity {
-                cache.evict_lru();
-            }
-            cache.entries.insert(
-                key.clone(),
-                Slot {
-                    value: default(),
-                    last_used: Instant::now(),
-                },
-            );
+        if !cache.entries.contains_key(&key) && cache.entries.len() >= cache.capacity {
+            cache.evict_lru();
         }
-        let slot = cache
-            .entries
-            .get_mut(&key)
-            .expect("entry was just inserted");
+        let slot = cache.entries.entry(key).or_insert_with(|| Slot {
+            value: default(),
+            last_used: Instant::now(),
+        });
         slot.last_used = Instant::now();
         &mut slot.value
     }
@@ -200,8 +195,8 @@ impl<K, V> Clone for LRUCache<K, V> {
 
 impl<K, V> LRUCache<K, V>
 where
-    K: Hash + Eq + Clone + Send + 'static,
-    V: Clone + Send + 'static,
+    K: Hash + Eq + Send + 'static,
+    V: Send + 'static,
 {
     /// Builds a cache and spawns the sweeper on the current `awak` runtime.
     pub fn new(ttl: Duration, capacity: usize, cleanup_interval: Duration) -> Self {
@@ -218,10 +213,6 @@ where
         })
         .detach();
         LRUCache { inner }
-    }
-
-    pub fn get(&self, key: &K) -> Option<V> {
-        self.inner.lock().unwrap().get(key)
     }
 
     pub fn insert(&self, key: K, value: V) {
@@ -243,6 +234,16 @@ where
     /// Locks the underlying cache for callers that need more than one operation.
     pub fn lock(&self) -> MutexGuard<'_, Cache<K, V>> {
         self.inner.lock().unwrap()
+    }
+}
+
+impl<K, V> LRUCache<K, V>
+where
+    K: Hash + Eq + Send + 'static,
+    V: Clone + Send + 'static,
+{
+    pub fn get(&self, key: &K) -> Option<V> {
+        self.inner.lock().unwrap().get(key)
     }
 }
 
@@ -310,6 +311,24 @@ mod tests {
 
         assert_eq!(cache.get(&7), Some(3));
         assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn supports_non_clone_key_and_value() {
+        #[derive(Hash, PartialEq, Eq)]
+        struct Key(u32);
+        struct Value(u32);
+
+        let mut cache: Cache<Key, Value> = Cache::new(Duration::from_secs(60), 2);
+        cache.insert(Key(1), Value(10));
+        assert_eq!(cache.get_ref(&Key(1)).map(|value| value.0), Some(10));
+
+        *cache.entry(Key(2)).or_insert_with(|| Value(20)) = Value(21);
+        assert_eq!(cache.get_ref(&Key(2)).map(|value| value.0), Some(21));
+
+        cache.insert(Key(3), Value(30));
+        assert!(cache.get_ref(&Key(1)).is_none(), "LRU entry kept");
+        assert!(cache.get_ref(&Key(3)).is_some());
     }
 
     #[test]

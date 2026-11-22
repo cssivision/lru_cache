@@ -61,7 +61,8 @@ assert_eq!(cache.get(&"a"), Some(1));
 | `remove_expired()` | Drop every entry older than the TTL. |
 
 Stale entries are removed on lookup, so callers never observe an expired
-entry.
+entry. Only `get` requires `V: Clone`; keys and values are otherwise not
+required to be `Clone`.
 
 ### `LRUCache<K, V>`
 
